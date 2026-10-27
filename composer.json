@@ -1,15 +1,38 @@
 {
-    "name": "lloyds-digital/telescope-mcp",
+    "name": "leonlav77/telescope-mcp",
     "description": "Minimal, read-only, key-protected MCP server for Laravel Telescope data.",
+    "keywords": [
+        "laravel",
+        "telescope",
+        "mcp",
+        "model-context-protocol",
+        "claude",
+        "ai",
+        "debugging",
+        "observability"
+    ],
+    "homepage": "https://github.com/LeonLav77/telescope-mcp",
     "type": "library",
-    "license": "proprietary",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "LeonLav77",
+            "email": "leonlav77@gmail.com",
+            "homepage": "https://github.com/LeonLav77"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/LeonLav77/telescope-mcp/issues",
+        "source": "https://github.com/LeonLav77/telescope-mcp"
+    },
     "require": {
         "php": "^8.2",
+        "illuminate/support": "^12.0|^13.0",
         "laravel/mcp": "^1.0",
         "laravel/telescope": "^5.0"
     },
     "require-dev": {
-        "orchestra/testbench": "^9.15|^10.8|^11.0",
+        "orchestra/testbench": "^10.8|^11.0",
         "pestphp/pest": "^3.8|^4.0"
     },
     "autoload": {

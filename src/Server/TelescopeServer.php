@@ -77,7 +77,7 @@ class TelescopeServer extends Server
             TEXT;
 
         try {
-            $this->version = InstalledVersions::getPrettyVersion('lloyds-digital/telescope-mcp') ?? $this->version;
+            $this->version = InstalledVersions::getPrettyVersion('leonlav77/telescope-mcp') ?? $this->version;
         } catch (Throwable) {
             // Not installed through Composer (e.g. the package's own tests).
         }

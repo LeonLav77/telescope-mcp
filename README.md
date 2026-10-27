@@ -1,9 +1,13 @@
-# lloyds-digital/telescope-mcp
+# Telescope MCP
+
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/leonlav77/telescope-mcp.svg)](https://packagist.org/packages/leonlav77/telescope-mcp)
+[![Tests](https://github.com/LeonLav77/telescope-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/LeonLav77/telescope-mcp/actions/workflows/tests.yml)
+[![License](https://img.shields.io/packagist/l/leonlav77/telescope-mcp.svg)](LICENSE.md)
 
 Minimal, read-only, key-protected [MCP](https://modelcontextprotocol.io) server that lets Claude (or any MCP client) read a Laravel app's **Telescope** data and follow it from a request into its queries, exceptions, logs and dispatched jobs, then into each job's own execution.
 
 - **Installs with `composer require`, nothing else.** No env vars, no migrations, no published files, no config changes in the app.
-- Built on [`laravel/mcp`](https://github.com/laravel/mcp) v1. PHP 8.2+, Laravel 11+, Telescope 5.
+- Built on [`laravel/mcp`](https://github.com/laravel/mcp) v1. PHP 8.2+, Laravel 12 or 13, Telescope 5.
 
 ## Tools
 
@@ -35,7 +39,7 @@ How the drill-down works: Telescope gives every entry recorded during one reques
 ## Install (per project)
 
 ```bash
-composer require lloyds-digital/telescope-mcp
+composer require leonlav77/telescope-mcp
 ```
 
 Deploy, and the endpoint is live at `https://your-app.com/mcp/<20 hex chars>`: the path is derived from `APP_KEY` so it can't be guessed (set `TELESCOPE_MCP_PATH` to choose your own). To get the URL and the access key, run this wherever the app's production `APP_KEY` is set (e.g. on the server):
@@ -45,14 +49,6 @@ php artisan telescope-mcp:key
 ```
 
 It prints the key and a ready-to-paste `claude mcp add` command. It writes nothing: the key is derived from `APP_KEY` (HMAC-SHA256), so nothing is stored and every instance behind a load balancer agrees on it. The key can't be used to recover `APP_KEY`, but anyone who has `APP_KEY` can derive it, so it is exactly as secret as `APP_KEY`. Rotating `APP_KEY` rotates the key; to revoke a leaked key without that, or to give environments that share an `APP_KEY` (e.g. a staging copy of production) different keys, set `TELESCOPE_MCP_KEY_SALT`.
-
-The package is private. Add the Git repository to each project's `composer.json` before requiring it:
-
-```json
-"repositories": [
-    { "type": "vcs", "url": "git@github.com:lloyds-digital/telescope-mcp.git" }
-]
-```
 
 ## Connect Claude Code
 
@@ -131,3 +127,15 @@ php vendor/bin/pest                      # SQLite
 TEST_DB=mysql php vendor/bin/pest        # MySQL on 127.0.0.1:3307 (see tests/TestCase.php)
 TEST_DB=pgsql php vendor/bin/pest        # Postgres on 127.0.0.1:5433
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## Security
+
+If you find a security issue, please report it privately through [GitHub's security advisories](https://github.com/LeonLav77/telescope-mcp/security/advisories/new) instead of opening a public issue.
+
+## License
+
+MIT. See [LICENSE.md](LICENSE.md).
