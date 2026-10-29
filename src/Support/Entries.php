@@ -8,8 +8,10 @@ use Illuminate\Database\Connection;
 use Generator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Laravel\Telescope\Storage\EntryModel;
+use PDO;
 use Throwable;
 use WeakMap;
 
@@ -272,10 +274,14 @@ final class Entries
      * "Auth:<id>" is on every query they caused) is checked per scanned
      * entry through the (entry_uuid, tag) primary key, because MySQL would
      * otherwise materialize millions of uuids for every chunk.
+     * Several tags match entries carrying any of them.
+     *
+     * @param  string|list<string>  $tag
      */
-    public function tagged(Builder $query, string $tag): void
+    public function tagged(Builder $query, string|array $tag): void
     {
-        $uuids = self::connection()->table('telescope_entries_tags')->where('tag', $tag)->limit(self::RARE_TAG + 1)->pluck('entry_uuid');
+        $tags = (array) $tag;
+        $uuids = self::connection()->table('telescope_entries_tags')->whereIn('tag', $tags)->limit(self::RARE_TAG + 1)->distinct()->pluck('entry_uuid');
 
         if ($uuids->count() <= self::RARE_TAG) {
             // No match: an always-false condition, not uuid in (''), which Postgres rejects for its uuid column.
@@ -292,7 +298,28 @@ final class Entries
         $query->whereExists(fn ($sub) => $sub->selectRaw('1')
             ->from('telescope_entries_tags')
             ->whereColumn('telescope_entries_tags.entry_uuid', "{$table}.uuid")
-            ->where('telescope_entries_tags.tag', $tag));
+            ->whereIn('telescope_entries_tags.tag', $tags));
+    }
+
+    /**
+     * Which of the given tags each entry carries.
+     *
+     * @param  list<string>  $uuids
+     * @param  list<string>  $tags
+     * @return array<string, list<string>> uuid => tags
+     */
+    public function tagsAmong(array $uuids, array $tags): array
+    {
+        $found = [];
+
+        foreach (array_chunk($uuids, 500) as $chunk) {
+            self::connection()->table('telescope_entries_tags')->whereIn('entry_uuid', $chunk)->whereIn('tag', $tags)->get(['entry_uuid', 'tag'])
+                ->each(function ($row) use (&$found) {
+                    $found[$row->entry_uuid][] = $row->tag;
+                });
+        }
+
+        return $found;
     }
 
     /**
@@ -518,7 +545,10 @@ final class Entries
         [$low, $high] = $this->ranges[$query] ?? [null, null];
         $floor = max($low ?? $extent[0], $extent[0]);
         $ceiling = min($cursor ?? PHP_INT_MAX, ($high ?? $extent[1]) + 1);
-        $span = max(self::FIRST_SLICE, intdiv($ceiling - $floor, 8));
+        // Always a small first slice: a share of a large window as the first
+        // statement can, with content matching, outlast the whole budget (and
+        // the web server's proxy timeout) before the deadline is checked again.
+        $span = self::FIRST_SLICE;
 
         while ($ceiling > $floor) {
             if ($this->outOfTime()) {
@@ -527,12 +557,17 @@ final class Entries
 
             $bottom = max($floor, $ceiling - $span);
             $started = microtime(true);
-            $page = (clone $query)
+            $page = $this->beforeDeadline(fn () => (clone $query)
                 ->where('sequence', '<', $ceiling)
                 ->where('sequence', '>=', $bottom)
                 ->orderByDesc('sequence')
                 ->limit($chunk)
-                ->get();
+                ->get());
+
+            if ($page === null) {
+                return false;
+            }
+
             $took = microtime(true) - $started;
 
             if ($page->count() >= $chunk) {
@@ -553,6 +588,71 @@ final class Entries
         }
 
         return true;
+    }
+
+    /**
+     * Runs a read that the database stops at the call's deadline, where it
+     * can (MySQL, MariaDB); null when it was stopped. The deadline is only
+     * checked between statements otherwise, so one slow statement could run
+     * long past it.
+     *
+     * @template T
+     *
+     * @param  Closure(): T  $read
+     * @return T|null
+     */
+    private function beforeDeadline(Closure $read): mixed
+    {
+        $timeout = self::statementTimeout();
+
+        if ($timeout === null) {
+            return $read();
+        }
+
+        [$variable, $original] = $timeout;
+        $seconds = max(0.05, $this->deadline - microtime(true));
+        $connection = self::connection();
+        // MySQL's max_execution_time is in milliseconds (SELECT only), MariaDB's max_statement_time in seconds.
+        $connection->statement("set session {$variable} = ".($variable === 'max_execution_time' ? (int) ceil($seconds * 1000) : round($seconds, 2)));
+
+        try {
+            return $read();
+        } catch (QueryException $e) {
+            // 3024: MySQL, 1969: MariaDB, maximum statement execution time exceeded.
+            if (in_array((int) ($e->errorInfo[1] ?? 0), [3024, 1969], true)) {
+                return null;
+            }
+
+            throw $e;
+        } finally {
+            $connection->statement("set session {$variable} = {$original}");
+        }
+    }
+
+    /**
+     * The session variable that limits a statement's run time on this
+     * connection and its value before we change it, or null where there is
+     * none (or it can't be read).
+     *
+     * @return array{0: string, 1: int|float}|null
+     */
+    private static function statementTimeout(): ?array
+    {
+        $connection = self::connection();
+
+        if (! in_array($connection->getDriverName(), ['mysql', 'mariadb'], true)) {
+            return null;
+        }
+
+        try {
+            $version = (string) $connection->getPdo()->getAttribute(PDO::ATTR_SERVER_VERSION);
+            $variable = stripos($version, 'mariadb') !== false ? 'max_statement_time' : 'max_execution_time';
+            $original = $connection->selectOne("select @@session.{$variable} as value")->value ?? 0;
+        } catch (Throwable) {
+            return null;
+        }
+
+        return [$variable, is_numeric($original) ? $original + 0 : 0];
     }
 
     /**

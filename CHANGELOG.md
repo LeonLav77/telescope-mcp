@@ -6,6 +6,27 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `record_history` finds records by a business attribute (`attribute` + `value`, e.g. an order number) for
+  models and attributes listed in the new `record_lookup` config; several matches give one merged history.
+- `record_history` items carry `via_id` (the request, command or job) and a `url`.
+- `get_entry` returns a `url` to the entry in Telescope's dashboard (`TELESCOPE_MCP_TELESCOPE_URL`).
+- `stats` request groups carry `median_gap_s`, which shows polling.
+
+### Changed
+
+- `Cookie` and `Set-Cookie` header values are masked by default, also with redaction off
+  (`TELESCOPE_MCP_MASK_COOKIES=false` to return them as stored).
+- `get_entry` leaves browser boilerplate headers and a query string repeated in `payload` out of requests;
+  `include=["headers"]` returns them.
+
+### Fixed
+
+- Long scans (`search` over all retained data especially) could run far past the time budget in a single
+  statement and be cut off by a proxy timeout (502). Scans now start with a small slice, and on MySQL/MariaDB
+  every statement is stopped by the database at the deadline.
+
 ## [1.0.0]
 
 First public release.

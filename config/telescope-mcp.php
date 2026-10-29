@@ -58,17 +58,52 @@ return [
     |
     | Off by default: data is returned as Telescope stored it. Telescope masks
     | only a few fields itself (authorization header, password inputs), so
-    | results include session cookies (Set-Cookie), tokens in outgoing request
-    | headers and password hashes in sessions, and they reach the AI provider
-    | behind the MCP client. TELESCOPE_MCP_REDACT=true replaces values under
-    | secret-looking keys with "********"; add key names (case-insensitive,
-    | substring match) to redact_keys.
+    | results include tokens in outgoing request headers and password hashes
+    | in sessions, and they reach the AI provider behind the MCP client.
+    | TELESCOPE_MCP_REDACT=true replaces values under secret-looking keys with
+    | "********"; add key names (case-insensitive, substring match) to
+    | redact_keys.
+    |
+    | Cookie and Set-Cookie header values are live sessions and are masked
+    | even with redaction off (cookie names and attributes stay visible).
+    | TELESCOPE_MCP_MASK_COOKIES=false returns them as stored.
     |
     */
 
     'redact' => env('TELESCOPE_MCP_REDACT', false),
 
     'redact_keys' => [],
+
+    'mask_cookies' => env('TELESCOPE_MCP_MASK_COOKIES', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Links to the Telescope UI
+    |--------------------------------------------------------------------------
+    |
+    | get_entry and record_history return a `url` that opens the entry in
+    | Telescope's dashboard. Empty: built from APP_URL (or telescope.domain)
+    | and telescope.path. Set it when the dashboard is reached under another
+    | address, e.g. "https://admin.example.com/telescope". false: no links.
+    |
+    */
+
+    'telescope_url' => env('TELESCOPE_MCP_TELESCOPE_URL'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Record lookup
+    |--------------------------------------------------------------------------
+    |
+    | Lets record_history find records by a business attribute (an order
+    | number, an email) instead of the primary key. Only the models and
+    | attributes listed here can be looked up, and only primary keys are read
+    | from the app's database. Example:
+    |   'record_lookup' => [App\Models\Order::class => ['order_number', 'customer_email']],
+    |
+    */
+
+    'record_lookup' => [],
 
     /*
     |--------------------------------------------------------------------------

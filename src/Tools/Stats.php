@@ -35,7 +35,9 @@ class Stats extends TelescopeTool
         group_by="user" groups by logged-in user instead (who is active, who hits errors), "ip" and "status" by
         client IP and HTTP status (requests), "hostname" by server.
         Each group has count, errors (5xx, failed jobs, non-zero exits, error logs...), duration percentiles where
-        recorded (p50/p95/max/total ms), last_seen and a sample id for get_entry. compare_previous=true adds the same
+        recorded (p50/p95/max/total ms), last_seen and a sample id for get_entry. Request groups also get
+        median_gap_s, the typical seconds between two of its requests: a small, steady gap for one user or IP means
+        something is polling (an auto-refresh, a script). compare_previous=true adds the same
         numbers for the window just before (e.g. before/after a deploy) and flags new groups.
         Takes the filters of list_entries (except search). Reads at most the newest scan limit entries of the window
         within the time limit; `coverage` says how much was read.
@@ -139,8 +141,10 @@ class Stats extends TelescopeTool
         $filter = ListEntries::apply($entries, $query, $type, $filters);
         $groups = [];
         $durations = [];
+        $gaps = [];
+        $previous = [];
 
-        $scan = $entries->each($query, (int) config('telescope-mcp.stats_scan_limit', 20000), function (EntryModel $row) use ($type, $filter, $groupBy, &$groups, &$durations) {
+        $scan = $entries->each($query, (int) config('telescope-mcp.stats_scan_limit', 20000), function (EntryModel $row) use ($type, $filter, $groupBy, &$groups, &$durations, &$gaps, &$previous) {
             if ($filter && ! $filter($row)) {
                 return;
             }
@@ -178,8 +182,24 @@ class Stats extends TelescopeTool
                 $durations[$key][] = $ms;
             }
 
+            // Rows come newest first: the gap to the group's previous (newer) one.
+            if ($type === 'request' && ($at = self::timestamp($row)) !== null) {
+                if (isset($previous[$key])) {
+                    $gaps[$key][] = $previous[$key] - $at;
+                }
+
+                $previous[$key] = $at;
+            }
+
             $groups[$key] = $group;
         }, chunk: in_array($type, Entries::SMALL_TYPES, true) ? 5000 : 1000);
+
+        foreach ($gaps as $key => $values) {
+            if (count($values) >= 2) {
+                sort($values);
+                $groups[$key]['median_gap_s'] = self::percentile($values, 0.5);
+            }
+        }
 
         foreach ($durations as $key => $values) {
             sort($values);
@@ -260,8 +280,15 @@ class Stats extends TelescopeTool
         };
     }
 
+    private static function timestamp(EntryModel $row): ?int
+    {
+        $at = Present::time($row->created_at);
+
+        return $at === null ? null : (strtotime($at) ?: null);
+    }
+
     /**
-     * @param  list<float>  $sorted
+     * @param  list<float|int>  $sorted
      */
     private static function percentile(array $sorted, float $p): float
     {

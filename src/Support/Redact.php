@@ -31,13 +31,21 @@ final class Redact
     }
 
     /**
+     * Cookie headers carry live sessions: masked even with redaction off, unless switched off too.
+     */
+    public static function cookiesMasked(): bool
+    {
+        return filter_var(config('telescope-mcp.mask_cookies', true), FILTER_VALIDATE_BOOL);
+    }
+
+    /**
      * @param  array<string, mixed>  $content
      * @return array<string, mixed>
      */
     public static function content(string $type, array $content): array
     {
         if (! self::enabled()) {
-            return $content;
+            return self::cookiesMasked() ? self::walk($content, []) : $content;
         }
 
         $content = self::walk($content, self::keys());
@@ -96,6 +104,10 @@ final class Redact
             return self::setCookie($value);
         }
 
+        if ($key !== null && strtolower($key) === 'cookie') {
+            return $value === null || $value === '' || $value === [] ? $value : self::MASK;
+        }
+
         if ($key !== null && self::secretKey($key, $keys)) {
             return $value === null || $value === '' || $value === [] || $value === self::MASK ? $value : self::MASK;
         }
@@ -108,8 +120,8 @@ final class Redact
             return $value;
         }
 
-        // "Bearer …" / "Basic …" credentials wherever they appear.
-        if (is_string($value) && preg_match('/\b(bearer|basic)\s/i', $value) === 1) {
+        // "Bearer …" / "Basic …" credentials wherever they appear (full redaction only).
+        if ($keys !== [] && is_string($value) && preg_match('/\b(bearer|basic)\s/i', $value) === 1) {
             return (string) preg_replace('/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{8,}/i', '$1 '.self::MASK, $value);
         }
 

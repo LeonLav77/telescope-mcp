@@ -14,13 +14,13 @@ Minimal, read-only, key-protected [MCP](https://modelcontextprotocol.io) server 
 | Tool | What it does |
 |---|---|
 | `overview` | Start here. App name and environment, server time (UTC), oldest/newest retained entry, and for a window (default last 60 min): counts per type, recording hosts, exception groups, 5xx requests, failed jobs, slow queries, each with ids. Short windows also get a count of the last 24h's exceptions and failed jobs. |
-| `stats` | Aggregates one type over a window (default 24h): requests by route/controller, jobs by class (with status counts), queries by normalized SQL, commands and scheduled tasks by name, exceptions by family, logs by level + message, and more. Count, errors, p50/p95/max/total ms, a sample id. `compare_previous` adds the window before it and flags new groups. |
+| `stats` | Aggregates one type over a window (default 24h): requests by route/controller, jobs by class (with status counts), queries by normalized SQL, commands and scheduled tasks by name, exceptions by family, logs by level + message, and more. Count, errors, p50/p95/max/total ms, a sample id. Request groups also get `median_gap_s`, the typical seconds between two requests: a small steady gap per user or IP means polling. `compare_previous` adds the window before it and flags new groups. |
 | `list_entries` | Specific entries of one type, newest first or `sort=slowest`, one line each. Filters: `from`/`to`/`minutes`, `tag`, `name` (job/command/event/mail class…), `level` (logs), `status` (jobs), `min_status`/`max_status`, `method`, `path`, `min_ms`, `hostname`, `search`, `exclude`. Exceptions are grouped by family (same file and line) with occurrence counts (`group=false` for every occurrence). Paging with `cursor`; `continue_with` holds the arguments for the next call. |
 | `search` | Text search (order number, email, URL, class, error message…) across every type except the bulky `query`, `view`, `redis` and `cache` entries (`all_types=true` or `type` to include them). Newest first; about 15 s of work per call, then `continue_with` goes further back. |
-| `get_entry` | Full entry plus what it connects to. Exceptions and failed jobs show `app_frames` (the app's own stack frames; the full trace with `include=["trace"]`). The batch digest has the origin (request, command, executed job or scheduler run), a time breakdown (total vs queries, redis and outgoing HTTP, plus unaccounted time), slowest and duplicate (N+1) queries, failed scheduled tasks with their runtime, and other entries with problems first and repeats collapsed. For jobs, also the batch the job ran in. `batch="brief"` or `"none"` when opening several entries of one batch. |
+| `get_entry` | Full entry plus what it connects to. Exceptions and failed jobs show `app_frames` (the app's own stack frames; the full trace with `include=["trace"]`). The batch digest has the origin (request, command, executed job or scheduler run), a time breakdown (total vs queries, redis and outgoing HTTP, plus unaccounted time), slowest and duplicate (N+1) queries, failed scheduled tasks with their runtime, and other entries with problems first and repeats collapsed. For jobs, also the batch the job ran in. `batch="brief"` or `"none"` when opening several entries of one batch. A `url` opens the entry in Telescope's dashboard. Requests leave out browser boilerplate headers (`sec-ch-*`, `sec-fetch-*`, `accept-encoding`, the CSP response header…) and a query string already in `payload`; `include=["headers"]` returns them as stored. |
 | `get_batch` | Everything from one request / job run / command / scheduler run, in order, optionally one type only. Paging with `cursor`. |
 | `user_activity` | What one logged-in user did, found by id, email or name: their actions (writes, failed requests and requests that changed data, each with the records changed and fields set), all records they changed, requests per hour (sessions and polling), routes with timings, IPs, user agents, exceptions they hit, jobs they triggered. |
-| `record_history` | One Eloquent record's history (`model` + `key`), oldest first: created/updated/deleted with the fields set, who did it, and through which request, command or job; plus jobs, mail and notifications that carried it. |
+| `record_history` | One Eloquent record's history (`model` + `key`), oldest first: created/updated/deleted with the fields set, who did it, and through which request, command or job (`via_id` to open it); plus jobs, mail and notifications that carried it. With `attribute` + `value` instead of `key`, finds records by a business field (an order number) where `record_lookup` allows it; several matches give one merged history. |
 | `n_plus_one` | N+1 queries across the app: the same query repeated in one request or job, grouped by query and code location, with how many requests/jobs did it, the most repeats, time spent and the routes affected. `kind` is `n+1` (different values: eager load) or `identical` (same values: reuse or cache). Narrow with `path` or `name` (controller or job class) for a thorough check. |
 | `list_tags` | Tags in use (Telescope's `Auth:<id>`, `App\Models\Order:<key>`, `failed`, `slow`, plus the app's own), summarized by prefix, so the `tag` filter can be used without guessing. |
 
@@ -28,7 +28,20 @@ Prompts (shown by clients that support MCP prompts): `investigate_error`, `inves
 
 `stats` can also group by `user`, `ip`, `status` or `hostname` (`group_by`), e.g. who is active or which IPs get 4xx responses, and takes the `list_entries` filters. Summary lines name the logged-in user (`· Kashif`) where Telescope recorded one.
 
-Every call has a time budget (`time_budget_seconds`, default 15): long scans stop and say how far they got instead of hitting PHP's execution limit.
+Every call has a time budget (`time_budget_seconds`, default 15): long scans stop and say how far they got instead of hitting PHP's execution limit. On MySQL and MariaDB the database also stops any single statement at the deadline (`max_execution_time` / `max_statement_time`, restored afterwards), so one slow content scan can't outlast the budget or a proxy's timeout.
+
+### Finding records by a business key
+
+Telescope tags model changes with the primary key (`App\Models\Order:01a1…`), so "order #59308" usually isn't searchable: update entries only hold the changed fields. Allow lookups by the fields people use, and `record_history(model="Order", attribute="order_number", value="59308")` finds the record(s) first:
+
+```php
+// config/telescope-mcp.php
+'record_lookup' => [
+    App\Models\Order::class => ['order_number', 'customer_email'],
+],
+```
+
+Only listed models and attributes can be looked up, and only primary keys are read from the app's database (up to 10 records per lookup).
 
 ### Response size
 
@@ -79,14 +92,14 @@ Or commit a project-scoped `.mcp.json` and keep the key in your shell environmen
 | Discovery | The endpoint path is derived from `APP_KEY` (`mcp/` plus 80 random bits; no "telescope" in it, so tools that exclude `telescope*` paths, like Debugbar, treat it like any other URL), so it can't be found by guessing. Every rejection (no key, wrong key, `Origin` header, plain HTTP) is the router's own 404 (same exception and message, so custom 404 pages render it identically) for every HTTP method (GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS), identical to a missing route, so probing reveals nothing either. After rotating `APP_KEY`, rebuild the route cache: the path moves with it. |
 | Transport | HTTPS required in production. Behind a load balancer that terminates TLS (e.g. AWS ALB), `X-Forwarded-Proto: https` is accepted from private network addresses, or from any proxy the app trusts via Laravel's `TrustProxies`; a client can't fake it from the internet. |
 | Browsers | Requests with an `Origin` header are rejected (CSRF / DNS rebinding). No session or cookie middleware. The path sits outside `api/*`, so the app's CORS config never applies. |
-| Writes | Tools only read, through Telescope's own `EntryModel`. Every tool call also runs in a transaction that is always rolled back, so nothing a call does can persist. Plain Laravel, no driver-specific code: works on any database Telescope supports. |
+| Writes | Tools only read, through Telescope's own `EntryModel` (and, for `record_lookup`, primary keys of the listed models). Every tool call also runs in a transaction that is always rolled back, so nothing a call does can persist. Works on any database Telescope supports; MySQL and MariaDB also get index hints and per-statement time limits. |
 | Load | 120 tool calls per minute per app (`rate_limit`, after authentication), capped limits, capped scans (`scan_limit`, `stats_scan_limit`, `query_scan_limit`), a per-call time budget (15 s), indexed time windows, 64 KB request bodies, 60k-char responses. |
 | Injection | Strict input validation: type enum, UUID format, integer ranges, ISO dates. All SQL is parameterised; `LIKE` wildcards are escaped. |
 | Self-recording | MCP requests are never recorded by Telescope, so the key never lands in stored headers and the tool's own reads don't pollute the data. |
-| Secrets in data | Returned as Telescope stored them. Telescope itself hides only the `authorization` header and password inputs, so results include session cookies (`Set-Cookie`), tokens in outgoing request headers and password hashes in sessions, and they reach the AI provider behind the MCP client. Fine when only trusted people hold the key; `TELESCOPE_MCP_REDACT=true` masks values under secret-looking keys (`*token*`, `*secret*`, `*password*`, `*cookie*`, `*api_key*`, `authorization`, `*signature*`, `*hmac*`, card fields…), `Bearer`/`Basic` credentials, secret query parameters and SQL literals compared with token/password columns as `********`; add key names with `redact_keys`. |
+| Secrets in data | Returned as Telescope stored them, except `Cookie` and `Set-Cookie` header values: those are live sessions and are always masked (names and attributes stay; `TELESCOPE_MCP_MASK_COOKIES=false` turns this off). Telescope itself hides only the `authorization` header and password inputs, so results include tokens in outgoing request headers and password hashes in sessions, and they reach the AI provider behind the MCP client. Fine when only trusted people hold the key; `TELESCOPE_MCP_REDACT=true` masks values under secret-looking keys (`*token*`, `*secret*`, `*password*`, `*cookie*`, `*api_key*`, `authorization`, `*signature*`, `*hmac*`, card fields…), `Bearer`/`Basic` credentials, secret query parameters and SQL literals compared with token/password columns as `********`; add key names with `redact_keys`. |
 | Prompt injection | Recorded data is largely written by users and anyone on the internet (URLs, payloads, user agents, messages, job data) and is read by an AI agent that may be able to run commands. Every result is cleaned before it is returned: characters that hide text from people (Unicode tag characters, which are decoded to visible text, zero-width and bidirectional controls, ANSI escapes, control characters) are removed; any value or key that reads as instructions to an AI (overriding instructions, role changes, fake `System:`/`Assistant:` turns, chat-template tokens, addressing Claude/the assistant with orders, "don't tell the user", "run the following command", `curl … \| sh`, markdown-image exfiltration links) is replaced with `[withheld: …]`, also inside summaries, stats labels and error messages; and each result starts with a notice that its contents are data, not instructions, on top of the server instructions saying the same. `get_entry(include=["suspicious"])` shows withheld values wrapped in an untrusted-data label. Detection is heuristic and tuned against real Telescope data; agents with shell or write access should still run with their normal permission prompts. `TELESCOPE_MCP_INJECTION_GUARD=false` turns off withholding (hidden characters are always removed). |
 
-Data is returned as stored (apart from the prompt-injection guard and optional redaction), and errors include full details (class, message, file:line, trace), since the endpoint is only reachable with the key. Treat the key like read access to the database.
+Data is returned as stored (apart from cookie masking, the prompt-injection guard and optional redaction), and errors include full details (class, message, file:line, trace), since the endpoint is only reachable with the key. Treat the key like read access to the database.
 
 ## Retention and time windows
 
@@ -96,7 +109,7 @@ Only Telescope's default indexes are used:
 
 - Time windows become primary-key (`sequence`) ranges through the `created_at` index.
 - Type-filtered reads go through the `(type, should_display_on_index)` index (forced on MySQL/MariaDB, where the optimizer otherwise walks the primary key through every type).
-- Scans run newest-first in sequence slices sized by how long the previous statement took, so sparse filters cover ground in few statements and expensive ones (content matching) stop in time.
+- Scans run newest-first in sequence slices sized by how long the previous statement took, starting small, so sparse filters cover ground in few statements and expensive ones (content matching) stop in time.
 - Counts per type use a primary-key range for short windows and the type index for long ones.
 - Tag filters use the tag index for rare tags (one record) and a per-entry primary-key check for common ones (an active user's `Auth:<id>`).
 - A request's `path` is matched at the start of its stored content, where Telescope writes the URI.
@@ -115,7 +128,9 @@ All times in and out are UTC (Telescope stores them in the app timezone; convers
 | `TELESCOPE_MCP_REQUIRE_HTTPS` | production only | Force on/off |
 | `TELESCOPE_MCP_KEY_SALT` | empty | Change to rotate the key without rotating `APP_KEY`; set per environment |
 | `TELESCOPE_MCP_REDACT` | `false` | Mask secret-looking values in results |
+| `TELESCOPE_MCP_MASK_COOKIES` | `true` | Mask `Cookie` / `Set-Cookie` values even with redaction off |
 | `TELESCOPE_MCP_INJECTION_GUARD` | `true` | Withhold values that read as instructions to an AI |
+| `TELESCOPE_MCP_TELESCOPE_URL` | `APP_URL` + `telescope.path` | Base of the dashboard links in results; `false` for none |
 
 Data is read from Telescope's own storage connection.
 
